@@ -1,0 +1,634 @@
+---
+title: "DATA602-Project"
+output:
+  html_document: default
+  pdf_document: default
+date: "2023-10-13"
+---
+
+**INTRODUCTION**
+
+Over the past decade the retail landscape has undergone a profound transformation. Many traditional stores have been supplemented and replaced by online virtual storefronts also known as e-commerce platforms. E-commerce has redefined the way people shop offering convenience and accessibility. The overall objective of this project is to determine which variables are statistically significant in understanding customer behavior on an e-commerce platform.  Some of the variables we analyzed are Churn Rate, Hours spent on the app, Purchase Frequency, Satisfaction Score, Gender, and Preferred Order Category.
+
+Our approach consisted of first exploring the data for any missing values and replacing those values with the median of each column. To answer our guiding questions, we used various statistical approaches like linear regression model, bootstrap techniques, chi-squared and a-nova. The techniques used were appropriate and significant to provide statistical evidence to investigate and answer our questions. It is important to note that the same data set was used for the DATA-601 project and data cleaning part of the project was imported from DATA-601.  
+
+
+$$Setting Up - Importing Important Libraries$$
+```{r}
+#To read excel
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(mosaic)
+library(mosaicData)
+library(zoo)
+```
+
+$$Part1:Importing Data and Exploring$$
+
+
+```{r}
+# Read the Excel file
+customer_behaviour_df = read_excel("E Commerce Dataset.xlsx", sheet = "E Comm")
+
+# Print the first few rows of the dataframe
+head(customer_behaviour_df)
+```
+```{r}
+# Print information about the dataframe structure
+str(customer_behaviour_df)
+```
+```{r}
+# Calculate the number of unique values for each column
+unique_counts = sapply(customer_behaviour_df, function(x) n_distinct(x, na.rm = TRUE))
+
+# Print the number of unique values for each column
+print(unique_counts)
+```
+
+$$Part2:Data Cleaning$$
+**Dropping columns not used in the analysis**
+```{r}
+# Dropping columns not used in the analysis
+columns_to_drop = c( "CityTier", "WarehouseToHome", "NumberOfAddress", "OrderAmountHikeFromlastYear")
+customer_behaviour_df = customer_behaviour_df[, !(names(customer_behaviour_df) %in% columns_to_drop)]
+```
+
+```{r}
+# Print missing values distribution
+cat("Missing values distribution: \n")
+print(colMeans(is.na(customer_behaviour_df)))
+```
+
+**Cleaning Categorical Columns**
+```{r}
+# Function to identify categorical columns
+is_categorical = function(column) {
+  is.factor(column) || is.character(column)
+}
+
+# Get column names that are categorical
+customer_behaviour_categorical = names(customer_behaviour_df)[sapply(customer_behaviour_df, is_categorical)]
+
+# Print categorical column names
+print(customer_behaviour_categorical)
+
+```
+
+```{r}
+print("Categorical Columns with the unique values and counts")
+for (col in customer_behaviour_categorical) {
+  cat("\n", col)
+  print(table(customer_behaviour_df[[col]]))
+}
+
+```
+
+**Remove Duplicates in unique Values in Categorical Columns**
+
+```{r}
+# Replace "Mobile" with "Mobile Phone" in PreferedOrderCat column
+customer_behaviour_df = customer_behaviour_df %>%
+  mutate(PreferedOrderCat = ifelse(PreferedOrderCat == "Mobile", "Mobile Phone", PreferedOrderCat))
+
+# Replace "Phone" with "Mobile Phone" in PreferredLoginDevice column
+customer_behaviour_df = customer_behaviour_df %>%
+  mutate(PreferredLoginDevice = ifelse(PreferredLoginDevice == "Phone", "Mobile Phone", PreferredLoginDevice))
+
+# Replace duplicates in PreferredPaymentMode column
+customer_behaviour_df = customer_behaviour_df %>%
+  mutate(PreferredPaymentMode = case_when(
+        PreferredPaymentMode == "CC" ~ "Credit Card",
+        PreferredPaymentMode == "COD" ~ "Cash on Delivery",
+        TRUE ~ PreferredPaymentMode))
+```
+
+**Converting two numerical Columns to Categorical for Analysis**
+```{r}
+# Convert 0 to "NO" and 1 to "YES" in a churn column 
+customer_behaviour_df = customer_behaviour_df %>%
+  mutate(Churn = ifelse(Churn == 0, "NO", "YES"))
+
+# Convert 0 to "NO" and 1 to "YES" in a Complain column 
+customer_behaviour_df = customer_behaviour_df %>%
+  mutate(Complain = ifelse(Complain == 0, "NO", "YES"))
+```
+
+**Filling NA values of Numerical Data types**
+```{r}
+# Select numerical columns
+customer_behaviour_numerical = customer_behaviour_df %>%
+  select_if(is.numeric) %>%
+  colnames()
+
+# Print numerical column names
+print(customer_behaviour_numerical)
+```
+
+```{r}
+numerical_summary = summary(customer_behaviour_df[c(customer_behaviour_numerical)])
+
+# Print the summary of numerical columns
+print(numerical_summary)
+```
+**Understand the distribution of Data**
+```{r}
+# Select the specified numerical columns
+columns_to_plot = c("Tenure", "HourSpendOnApp", "CouponUsed", "OrderCount", "DaySinceLastOrder")
+
+# Create a multi-panel plot with histograms for the selected columns
+par(mfrow = c(2, 3))  # 2 rows, 3 columns for 5 histograms
+for (col in columns_to_plot) {
+# Remove NA values, ensure numeric data, and drop invalid entries
+  non_na_data = as.numeric(na.omit(customer_behaviour_df[[col]]))
+  
+  # Check if there is valid data to plot
+  if (length(non_na_data) > 0) 
+    {
+      hist(non_na_data, 
+       main = paste("Histogram of", col), 
+       xlab = col,
+       col = "skyblue", 
+       border = "black", 
+       breaks = "FD",  # "FD" for Freedman-Diaconis rule for bin width
+       probability = TRUE)
+  }
+  else
+  {
+    print("No data for ",col)
+  }
+
+}
+```
+```{r}
+# Since we understood the skewness, fill NA with Median values using na.aggregate function from zoo libarary
+for (col in customer_behaviour_numerical) {
+  if (any(is.na(customer_behaviour_df[[col]]))) {
+    customer_behaviour_df[[col]] = na.aggregate(customer_behaviour_df[[col]], FUN = median)
+  }
+}
+```
+
+
+
+$$Part 3: Data Analysis and Visualization$$
+#Question-1: Linear Regression
+**Can the number of hours spent on the app predict the purchase frequency of a user??**
+
+$$
+\begin{align}
+{\rm H}_{0} & : & \text{There is no relationship between hours spent on the app and the order count}\\
+{\rm H}_{A} & : & \text{There is a relationship between hours spent on the app and the order count}\\
+\end{align}
+$$
+
+Lets visualize the relationship between the two variables
+```{r}
+ggplot(data=customer_behaviour_df,aes(x=OrderCount,y=HourSpendOnApp))+geom_point(col="blue")+ggtitle("Comparison of Hours Spend on App to Order COunt")
+```
+
+From the scatter plot we can observe there does not appear to be a strong linear relationship between the variables as the data points are spread across the plot without showing a clear upward or downward trend. In order to conclude if these two variables are statistically significant we compute a linear model. 
+
+*Estimating the model:*
+```{r}
+model=lm(HourSpendOnApp~OrderCount,data=customer_behaviour_df)
+```
+*Condition Checking: *
+```{r}
+#First Assumption: Residuals vs Fitted Values
+ggplot(model,aes(x=model$fitted.values, y=model$residuals))+geom_point()+geom_hline(yintercept = 0, color = "red", linetype = "dashed")+ggtitle("Residuals vs Fitted Values")
+```
+
+From the "Residuals vs Fitted Values Plot" we observe that the points are scattered around the horizontal line at zero without any specific pattern suggesting the assumption of linearity might hold. Additionally, the residuals are fairly spread across different fitted values, suggesting homoscedasticity might also be met. 
+
+```{r}
+#Second Condition: Checking for Normality 
+ggplot(model,aes(sample=model$residuals))+geom_qq()+geom_qq_line(colour = "red") +ggtitle("Normal Q-Q Plot")+xlab("Theoretical Quantiles")+ylab("Sample Quantiles")
+```
+
+From the normality plot above we observe the point do somewhat follow the red line however, there is a noticeable deviation from normality mainly around the tails. 
+
+*Analysis:*
+```{r}
+summary(model)
+```
+
+From the summary(model) we can observe: HourSpendOnAPP= 2.8606+0.0250*OrderCOunt
+The intercept Beta(0)=2.8606 indicating the expected hours spend on the app when the order count is 0.
+The slope Beta(1)=0.0250 suggesting that for every additional order, the hours spent on the app increase by 0.025 hours on average. 
+The R-squared=0.01041 which suggest that only 1% of the variability in hours spent on the app is explained by the order count which implies that other variables might influence the hours spent on the app.  
+The p-value is less than alpha=0.05, we reject the null hypothesis, indicating that the relationship between hours spent on the app and order count is statistically significant.  
+
+
+*Inference:* 
+
+The scatter plot did not show a strong linear relationship, however the regression coefficient is statistically significant. From the condition check, it was revealed that assumptions are somewhat met. Additionally, the linear regression revealed a small but a significant relationship between the hour spend on the app and order count, with a very low R-squared value. Based on this, we can conclude that there is a statistical evidence to suggest a relationship between order count and hours spend on the app however, other variables not included in the model may provide additional insights into the factors that influences the time spent on the app. 
+
+
+
+
+#Question-1.1 Bootstrap Analaysis for Gender Differences
+**Is the average “Hour Spend on the App” different between different “Gender” groups?**
+
+$$
+\begin{align}
+{\rm H}_{0} & : & \text{The average hour spent on the app is same for both genders.}\\
+{\rm H}_{A} & : & \text{The average hour spent on the app is different for both genders.} \\
+\end{align}
+$$
+
+```{r}
+male_data=customer_behaviour_df[customer_behaviour_df$Gender=="Male",]$HourSpendOnApp
+female_data=customer_behaviour_df[customer_behaviour_df$Gender=="Female",]$HourSpendOnApp
+observed_diff=mean(female_data)-mean(male_data)
+
+N_iterations=10000
+boot_diff_means=numeric(N_iterations)
+
+set.seed(42)
+for(i in 1:N_iterations){
+  sample_male=sample(male_data,length(male_data),replace=TRUE)
+  sample_female=sample(female_data,length(female_data),repalce=TRUE)
+  
+  boot_diff_means[i]=mean(sample_female)-mean(sample_male)
+}
+cat("Observed Difference means of hours spend on the app between genders(Female-Male):",observed_diff)
+boot_mean_data=data.frame(boot_diff_means)
+```
+```{r}
+ggplot(boot_mean_data,aes(x=boot_diff_means))+geom_histogram(col="black",fill="red",bins=50)+
+  geom_vline(aes(xintercept=mean(boot_diff_means)),col="green",linewidth=1)+
+  ggtitle("Bootstrap Distribution of Difference in Means of Gender Groups")+ylab("Frequency")
+```
+
+The green line in the histogram indicates the observed mean difference which is about 0.0257.And the 95% CI intervals is computed below: 
+
+```{r}
+qdata(boot_diff_means,c(0.025,0.975),data=boot_mean_data)
+```
+The 95% CI intervals suggest female spend more time on the app than male. However, there is not a strong indication that the difference in hours spend in the app is significantly higher among females. 
+
+```{r}
+p_value=sum(abs(boot_diff_means) >= abs(observed_diff)) / length(boot_diff_means)
+p_value
+```
+Since, the p_value is greater than alpha=0.05 we fail to reject the null hypothesis.This suggest that in context to our question that we do not have sufficient evidence to conclude there is a difference in the average hours spent on the app between different gender groups.
+
+*Inference* 
+From the analysis above we did not find any significant statistical difference in hours spend on the app between males and females.Therefore, we can infer that gender may not significantly influence the hours spend on the app and understanding customer segments and marketing to these different segments can enhance customer satisfaction. 
+
+
+
+
+#Question-2
+**Is there enough evidence to suggest Order Category Preference is independent of Gender?**
+
+
+Let's first visualize the relationship between two categorical variables
+```{r}
+ggplot(data = customer_behaviour_df, aes(x = PreferedOrderCat, fill = Gender)) +
+  geom_bar(position = "dodge") + xlab("Prefered Order Category") + ylab("Frequency") +ggtitle("Graph for relationship between Prefered order Category and Gender")
+```
+To illustrate the trend, we created a grouped bar chart for each category. The data reveals that Laptops, Accessories, and Mobile Phones are the top choices for both genders. Furthermore, it is evident from the data that males outnumber females in all categories.
+
+*Test Of Independence - Chi-Squared test*
+The chi-squared test is a statistical test used to determine whether there is a significant association between two categorical variables in a data set. In this case, we are trying to find out the association between Preferred Order Category and Gender
+*Assumption*
+Expected Frequencies: The expected frequency of each category in the contingency table should be greater than 5 for the chi-squared test to be valid. If expected frequencies are too low, the test's results can be unreliable.
+
+*Step 1: We consider the statistical hypotheses:*
+
+$$
+\begin{align}
+{\rm H}_{0} & : & \text{Order Category Preferrence is Independent of Gender} \hspace{0.5in} \\
+{\rm H}_{A} & : & \text{Order Category Preferrence is NOT Independent of Gender} \\
+\end{align}
+$$
+*Step 2: From the assumed state of the world of independence between these two categorical variables we compute the contingency table:*
+```{r}
+prefercategory_gender_table = table(customer_behaviour_df$PreferedOrderCat,customer_behaviour_df$Gender)
+prefercategory_gender_table
+```
+
+*Step 3: Compute the complete contingency table, χ2 test statistic, p-value*
+```{r}
+xchisq.test(prefercategory_gender_table, correct=FALSE)
+```
+*Conclusion*
+Since p-value is too low, ",0.000002983, " we reject Null hypothesis. We do not have strong evidence to prove they are independent(at 5% level of Significance). So, we infer that Order Category Preference is NOT Independent of Gender
+
+#Question-2.1
+**Is there enough evidence to suggest Order Category Preference is independent of Marital Status?**
+
+
+Let's first visualize the relationship between two categorical variables
+```{r}
+ggplot(data = customer_behaviour_df, aes(x = PreferedOrderCat, fill = MaritalStatus)) +
+  geom_bar(position = "dodge") + xlab("Prefered Order Category") + ylab("Frequency") +ggtitle("Graph for relationship between Prefered order Category and MaritalStatus")
+```
+To illustrate the trend, we created a grouped bar chart for each category. The data reveals that Laptops, Accessories, and Mobile Phones are the top choices for all marital status. Furthermore, it is evident from the data that married outnumber single and divorced in all categories.
+
+*Test Of Independence - Chi-Squared test*
+The chi-squared test is a statistical test used to determine whether there is a significant association between two categorical variables in a dataset. In this case, we are trying to find out the association between Prefered Order Category and Marital Status
+*Assumption*
+Expected Frequencies: The expected frequency of each category in the contingency table should be greater than 5 for the chi-squared test to be valid. If expected frequencies are too low, the test's results can be unreliable.
+
+*Step 1: We consider the statistical hypotheses:*
+
+$$
+\begin{align}
+{\rm H}_{0} & : & \text{Order Category Preferrence is Independent of Marital Status} \hspace{0.5in} \\
+{\rm H}_{A} & : & \text{Order Category Preferrence is NOT Independent of Marital Status} \\
+\end{align}
+$$
+*Step 2: From the assumed state of the world of independence between these two categorical variables we compute the contigency table:*
+```{r}
+prefercategory_maritalStatus_table = table(customer_behaviour_df$PreferedOrderCat,customer_behaviour_df$MaritalStatus)
+prefercategory_maritalStatus_table
+```
+*Step 3: Compute the complete Contigency table, χ2 test statistic, p-value*
+```{r}
+xchisq.test(prefercategory_maritalStatus_table, correct=FALSE)
+```
+*Conclusion*
+Since p-value is too low, ",0.0000000002386, " we reject Null hypothesis. We dont have strong evidence to prove they are independent(at 5% level of Significance). So, we infer that Order Category Preferrence is NOT Independent of Marital Status
+
+
+#Question-2.2
+**Is there any significant difference in coupon usage among the three marital status groups **
+
+Let's first visualize the relationship 
+```{r}
+ggplot(data = customer_behaviour_df, aes(x = CouponUsed,, fill = MaritalStatus)) +
+  geom_bar(position = "dodge") + xlab("Number of Coupons Used") + ylab("Frequency") +ggtitle("Graph for relationship between Coupon Usage and Marital Status")
+```
+*Analysis of Variance - ANOVA*
+ANOVA, or Analysis of Variance, is a statistical test used to analyze the differences among group means in a sample. It's an extension of the t-test, which allows you to compare means between two groups. ANOVA is especially useful when you have more than two groups to compare.
+
+*We consider the statistical hypotheses:*
+$$
+\begin{align}
+{\rm H}_{0} & : & \text{There is no significant difference in coupon usage among the three marital status groups} \hspace{0.5in} \\ \rm &:& \hspace{0.5in} \text{Mean coupon usage for married = Mean coupon usage for single = Mean coupon usage for divorced} \\
+{\rm H}_{A} & : & \text{There is a significant difference in coupon usage among at least one pair of marital status groups} \\
+\end{align}
+$$
+*Assumption* 
+ANOVA assumes that the data in each group are normally distributed and have equal variances.
+```{r}
+# Perform ANOVA
+anova_result = aov(CouponUsed ~ MaritalStatus, data = customer_behaviour_df)
+summary(anova_result)
+```
+*Conclusion*
+The p-value associated with the F-statistic (0.0075) is less than 0.05. P-value associated with the F-statistic indicates the probability of observing an F-statistic as extreme as the one computed from the data, assuming the null hypothesis is true.Therefore, we reject the null hypothesis. This means there is a significant difference in the means of coupon usage between at least two of the marital status groups (Married, Single, Divorced). 
+
+
+
+
+#Question-3: Do we have any correlation with the number of orders and number of coupons?
+
+Let us first understand that we tend towards finding relationship between the Coupon Used Vs Order Count. If any particular customer is given coupons to make a purchase then is it possible that the Order Count will increase or decrease or stays the same? To determine this, lets first draw a scatter plot graph to check and we'll deduce our interpretation of it afterwards.
+
+**Data Visualization**
+
+```{r}
+# Create a scatter plot
+ggplot(data = customer_behaviour_df, aes(x = OrderCount, y = CouponUsed)) +
+  geom_point(color= 'darkblue') +
+  labs(x = "Order Count", y = "Coupon Used") +
+  ggtitle("Scatter Plot of Order Count vs. Coupon Used")
+
+```
+As per the scatterplot designed above, we can infer that there is a direct and a very strong relationship between the OrderCount and CouponUsed because as we move upwards and right, the order count increases exponentially and is a very strong indication that if businesses implements a strategy to provide coupons to customers to make a purchase then the Order Volume is expected to grow significantly.
+
+**Let us check the correlation between CouponUsed Vs OrderCount**
+
+Pearson's Correlation Coefficient Test
+
+Step 1: We consider the statistical hypotheses:
+
+$$
+\begin{align}
+{\rm H}_{0} & : & \text{There is no significant correlation between the number of OrderCount and the number of CouponUsed} \hspace{0.5in} \\
+{\rm H}_{A} & : & \text{There is a significant correlation between the number of OrderCount and the number of CouponUsed} \\
+\end{align}
+$$
+**Before proceeding with Correlation test, we have ensured the following Assumptions:**
+
+1. The data is numeric & continuous
+2. There are no extreme outliersin the data
+3. Normal distribution of the data
+
+**Statistical Data Analysis**
+
+```{r}
+# Perform Pearson's correlation test
+correlation_check <- cor.test(customer_behaviour_df$OrderCount, customer_behaviour_df$CouponUsed)
+
+cat('Correlation Test Results: ')
+print(correlation_check)
+
+```
+
+**Inference/Conclusion**
+
+As per our Pearson's correlation test, we can confidently say that there's a very strong relationship between Order Count and Coupon Used. With a very small p-value which is 2.2e-16, stating that we can reject the null hypothesis (we reject the null hypothesis if the significance value is smaller than 0.05) because we have high correlation between the Order Count and Coupon Used. On the other hand,the 95 percent confidence interval for the correlation coefficient falls between approximately 0.6255 and 0.6563. This interval provides a range of values within which the true population correlation is likely to lie.
+
+
+
+#Question -3.2 Can we find any relationship between the number of orders and cashback amount received?
+
+
+To determine whether we have any correlation between the Order Count vs Cash back Amount, we need to understand if there's any possible correlation between the two given columns. If any particular e-commerce website is offering certain amount of Cash back Amount on every purchase they've made from their website, then it is possible that there could be a linear relationship between the two. For i.e if the Cash back Amount increases, then the Order Count is also expected to grow significantly. Let us first understand this through Data Visualization
+
+
+Pearson's Correlation Coefficient Test
+
+Step 1: We consider the statistical hypotheses:
+
+$$
+\begin{align}
+{\rm H}_{0} & : & \text{There is no significant correlation between the number of orders ("OrderCount") and the cashback amount received ("CashbackAmount").} \hspace{0.5in} \\
+{\rm H}_{A} & : & \text{There is a significant correlation between the number of orders ("OrderCount") and the cashback amount received ("CashbackAmount").} \\
+\end{align}
+$$
+
+```{r}
+# Perform Pearson's correlation test
+correlation_check1 <- cor.test(customer_behaviour_df$OrderCount, customer_behaviour_df$CashbackAmount)
+
+cat('Correlation Test Results: ')
+print(correlation_check1)
+
+```
+We would reject the null hypothesis (H0) in favor of the alternative hypothesis (H1). This suggests that there is a significant and strong correlation between the number of orders ("OrderCount") and the cashback amount received ("CashbackAmount"). The p-value of 2.2e-16 indicates that the correlation is highly statistically significant.
+
+In overall, p-value of 2.2e-16 provides very strong evidence against the null hypothesis and supports the conclusion that there is a significant relationship between "OrderCount" and "CashbackAmount." The correlation between these two variables is likely to be highly significant.
+
+
+```{r}
+
+lm_model <- lm(CashbackAmount ~ OrderCount, data = customer_behaviour_df)
+
+# Overlay the regression line on the scatter plot
+ggplot(data = customer_behaviour_df, aes(x = OrderCount, y = CashbackAmount)) +
+  geom_point(color= 'darkgreen') +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, color = "red") +
+  labs(x = "Order Count", y = "Cashback Amount") +
+  ggtitle("Linear Regression Model Plot OrderCount vs. CashbackAmount")
+
+```
+
+As per the scatter plot given above with a fitted linear regression model, we have seen an upward trend in comparison of Order Count Vs Cash back Amount represented by the red line. As the maximum proportion of orders lies within 100 to 300 for Cash back Amount and the Order Count displayed here is also significantly higher.
+
+
+
+**Before proceeding with Correlation test, we have ensured the following Assumptions:**
+
+1. The data is numeric & continuous
+2. There are no extreme outliers in the data
+3. Normal distribution of the data
+
+**Statistical Data Analysis**
+
+```{r}
+library(boot)
+# Define a function to compute the correlation coefficient
+correlation_fn <- function(data, indices) {
+  sampled_data <- data[indices, ]
+  correlation <- cor(sampled_data$OrderCount, sampled_data$CashbackAmount)
+  return(correlation)
+}
+
+# Set the number of bootstrap resamples
+num_resamples <- 1000
+
+# Perform bootstrapping
+set.seed(123)  # For reproducibility
+boot_results <- boot(data = customer_behaviour_df, statistic = correlation_fn, R = num_resamples)
+
+# Calculate the confidence interval
+boot_ci <- boot.ci(boot_results, type = "basic")
+
+# View the confidence interval
+print(boot_ci)
+
+
+```
+**Inference/Conclusion**
+
+The bootstrap analysis indicates that the 95% confidence interval for the correlation coefficient (Pearson's r) between "OrderCount" and "CashbackAmount" is between 0.2923 and 0.3511. This means that we can be 95% confident that the true correlation in the population falls within this interval.
+
+In simpler terms, it suggests that there is a statistically significant positive correlation between the number of orders and the cashback amount received, and the correlation is estimated to be within the specified interval. This information provides a measure of the relationship's strength and the uncertainty associated with the estimate.
+
+
+
+#Question-4
+**Is there enough evidence to suggest churn is independent of Gender?**
+
+Let's first visualize the relationship between two categorical variables
+```{r}
+ggplot(data = customer_behaviour_df, aes(x = Churn, fill = Gender)) +geom_bar(position ="dodge") +scale_color_brewer(palette="Dark2") +scale_fill_brewer(palette="Dark2") + xlab("Customer decision to Churn") + ylab("Frequency") +ggtitle("Graph for relationship between Customer's decision to churn and Gender")
+```
+```{r}
+head(customer_behaviour_df,4)
+tail(customer_behaviour_df,4)
+```
+The statistical hypotheses is
+$$
+{\rm H}_{0}: p_{male} = p_{female} \:\: \text{(there is no relationship between Gender and Decision to churn)} \\
+{\rm H}_{A}: p_{male} \ne p_{female} \:\: \text{(there IS A relationship between Gender and Decision to churn)} \\
+$$
+Conducting Prop.test to verify the hypothesis
+```{r}
+tableofcounts=tally(~ Churn | Gender, data=customer_behaviour_df)
+tableofcounts
+n.males = 3384
+n.females = 2246
+x.males = 600
+x.females = 348
+prop.test(c(348, 600), c(2246, 3384), alternative="two.sided", correct=FALSE)
+
+```
+Inference-
+```{r}
+cat("Using the prop test we deduce the P-value as 0.02811. Level of significance is 0.05. Since the p- value is less than the level of significance we can reject the null Hypothesis. The statistical evidence shows that there is a relationship between gender and decision to churn. It can be seen from the histogram as well that in the population who decide to churn, Males decide to churn more than females.")
+```
+
+
+#Question-4.1
+**Is there enough evidence to suggest churn is independent of Complaints registered or not?**
+
+Let's first visualize the relationship between two categorical variables
+```{r}
+ggplot(data=customer_behaviour_df) + geom_bar(aes(x = Churn, fill = Complain), position = "fill") + scale_color_brewer(palette="Dark2") + scale_fill_brewer(palette="Dark2")
+
+```
+The statistical hypotheses is
+$$
+{\rm H}_{0}:  \:\: \text{There is no relationship between customer registering complaint and Decision to churn} \\
+{\rm H}_{A}:  \:\: \text{There IS A relationship between customer registering complaint and Decision to churn} \\
+$$
+Conducting Prop.test to verify the hypothesis
+```{r}
+tableofcounts1=tally(~ Churn | Complain, data=customer_behaviour_df)
+tableofcounts1
+chisq.test(tableofcounts1, correct=FALSE)
+```
+
+Inference-
+```{r}
+cat("Using the Chi-square test we deduce the P-value as 0.00000000000000022 ~ 0. Level of significance is 0.05. Since the p- value is very less than the level of significance we can reject the null Hypothesis. There is enough statistical evidence that shows that there is a relationship between customer registering a complain and decision to churn.It can be seen in the histogram well that Customers who decide to churn have registered more complaints")
+```
+
+#Question-4.2
+**Is there enough evidence to suggest churn is independent of Satisfaction scores?**
+
+
+Let's first visualize the relationship between two categorical variables
+```{r}
+ggplot(data = customer_behaviour_df, aes(x = SatisfactionScore, fill =Churn)) +geom_bar(position = "dodge") + xlab("Satisfaction Scores") + ylab("Frequency") +ggtitle("Graph for relationship between Customer's decision to churn and Customer's satisfaction score")+scale_color_brewer(palette="Dark2") +scale_fill_brewer(palette="Dark2")
+
+```
+The statistical hypotheses is
+$$
+{\rm H}_{0}:  \:\: \text{There IS NO relationship between a customer's satisfaction score and Decision to churn} \\
+{\rm H}_{A}:  \:\: \text{There IS A relationship between a customer's satisfaction score and Decision to churn} \\
+$$
+Conducting Prop.test to verify the hypothesis
+```{r}
+tableofcounts2=tally(~ Churn | SatisfactionScore, data=customer_behaviour_df)
+tableofcounts2
+chisq.test(tableofcounts2, correct=FALSE)
+```
+
+Inference-
+```{r}
+cat("Using the Chi-square test we deduce the P-value as 0.00000000000002423 ~ 0.The  Level of significance is 0.05. Since the p- value is very less than the level of significance we reject the Null hypothesis. We can hence deduce that there is a relationship between a customer's satisfaction score and Decision to churn. It can be inferred that as a customer's satisfaction level increases, there is slow and gradual rise in the customer retention, as you can see the number of customers not churned stays somewhat intact for customers with satisfaction score of 3 to 5. However, ne thing to  note is that this is not a very strong evidence, we will require to investigate other parameter's like the reason to churn to conclude a stonger inference on this relation which can be explored with a detailed survey")
+```
+
+*Conclusion*
+
+Question 1: From question 1 we can conclude that there is a statistical evidence to suggest that there is a linear relationship between the "Order Count" and "Hours Spend on the App" however, the low R-Squared suggests that other variables may influence the "Hour Spend on the App'. This is due to only 1% variability of "Hour Spend on the App" is explained by the "Order Count" variable. Additionally from the bootstrap method we did not find any significant statistical difference in hours spend on the app between males and females. Females spend more time on the app in comparison to males however,there is not a strong indication that the difference in hours spend in the app is significantly higher among females.
+
+Question 2: 
+
+Question 3: 
+
+Question 4: 
+
+
+
+
+**References**
+
+Verma,(2021, January 26) A. Ecommerce customer churn analysis and prediction. Kaggle. https://www.kaggle.com/datasets/ankitverma2010/ecommerce-customer-churn-analysis-and-prediction
+
+Countants. (2020, January 5). Why consumer behavior analysis is so relevant to the ecommerce business? Medium https://medium.datadriveninvestor.com/why-consumer-behavior-analysis-is-so-relevant-to-the-ecommerce-business-8f49c250ca9c
+
+
+Zanzana, Salim, and Jessica Martin. (2023, February 21). Retail e-commerce and COVID-19: How online sales evolved as in-person shopping resumed. https://www150.statcan.gc.ca/n1/pub/11-621-m/11-621-m2023002-eng.htm.
+
+Verma, Ankit.(2023, July 6). “E-commerce Dataset.” (CC BY-NC-SA 4.0) creativecommon.org  https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+

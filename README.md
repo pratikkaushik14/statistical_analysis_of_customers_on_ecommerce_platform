@@ -1,0 +1,2 @@
+# statistical_analysis_of_customers_on_ecommerce_platform
+Statistical Analysis using R for Customers Behavior on Ecommerce Platform
